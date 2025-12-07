@@ -1,0 +1,337 @@
+name: 完整测试套件
+
+# 完整测试只在主要分支上运行
+on:
+  push:
+    branches: [ main, develop ]
+  # PR合并后自动触发
+  pull_request:
+    types: [closed]
+    branches: [ main, develop ]
+
+# 取消同一分支的旧构建
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ================================
+  # 后端测试
+  # ================================
+  backend-unit-test:
+    name: 后端单元测试
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 拉取代码
+        uses: actions/checkout@v4
+      
+      - name: 🐍 设置Python环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+      
+      - name: 📦 安装uv包管理器
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      
+      - name: 📦 安装依赖（含测试依赖）
+        run: |
+          uv sync --extra test
+      
+      - name: 🧪 运行单元测试
+        run: |
+          cd backend
+          uv run pytest tests/unit -v --cov=. --cov-report=xml --cov-report=term
+        continue-on-error: false
+      
+      - name: 📊 上传覆盖率报告
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./backend/coverage.xml
+          flags: backend
+          name: backend-coverage
+
+  backend-integration-test:
+    name: 后端集成测试
+    runs-on: ubuntu-latest
+    needs: backend-unit-test
+    
+    steps:
+      - name: 📥 拉取代码
+        uses: actions/checkout@v4
+      
+      - name: 🐍 设置Python环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: 📦 安装uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      
+      - name: 📦 安装依赖（含测试依赖）
+        run: uv sync --extra test
+      
+      - name: 🧪 运行集成测试
+        run: |
+          cd backend
+          uv run pytest tests/integration -v
+        env:
+          # 使用mock模式，不依赖真实API
+          TESTING: true
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY || 'mock-api-key-for-testing' }}
+
+  # ================================
+  # 前端测试
+  # ================================
+  frontend-test:
+    name: 前端测试
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 拉取代码
+        uses: actions/checkout@v4
+      
+      - name: 📦 设置Node.js环境
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      
+      - name: 📦 安装依赖
+        run: |
+          cd frontend
+          npm ci
+      
+      - name: 🔍 Lint检查
+        run: |
+          cd frontend
+          npm run lint
+      
+      - name: 🧪 运行单元测试
+        run: |
+          cd frontend
+          npm test -- --run --coverage
+        continue-on-error: false
+      
+      - name: 📊 上传覆盖率报告
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./frontend/coverage/coverage-final.json
+          flags: frontend
+          name: frontend-coverage
+      
+      - name: 🏗️ 构建检查
+        run: |
+          cd frontend
+          npm run build
+
+  # ================================
+  # Docker环境测试
+  # ================================
+  docker-test:
+    name: Docker环境测试
+    runs-on: ubuntu-latest
+    needs: [backend-integration-test, frontend-test]
+    
+    steps:
+      - name: 📥 拉取代码
+        uses: actions/checkout@v4
+      
+      - name: 🔧 设置环境变量
+        run: |
+          cp .env.example .env
+          # 注入测试用的API密钥
+          echo "GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY || 'mock-api-key' }}" >> .env
+      
+      - name: 🐳 构建Docker镜像
+        run: |
+          docker-compose build --no-cache
+      
+      - name: 🚀 启动服务
+        run: |
+          docker-compose up -d
+          echo "等待服务就绪..."
+          sleep 20
+      
+      - name: 🏥 健康检查
+        run: |
+          # 后端健康检查
+          echo "检查后端..."
+          for i in {1..30}; do
+            if curl -f http://localhost:5000/health; then
+              echo "✓ 后端启动成功"
+              break
+            fi
+            echo "等待后端... ($i/30)"
+            sleep 2
+          done
+          
+          # 前端健康检查
+          echo "检查前端..."
+          for i in {1..30}; do
+            if curl -f http://localhost:3000; then
+              echo "✓ 前端启动成功"
+              break
+            fi
+            echo "等待前端... ($i/30)"
+            sleep 2
+          done
+      
+      - name: 🧪 运行Docker环境测试
+        run: |
+          chmod +x scripts/test_docker_environment.sh
+          AUTO_CLEANUP=false ./scripts/test_docker_environment.sh
+      
+      - name: 📋 查看容器日志（失败时）
+        if: failure()
+        run: |
+          echo "=== Backend Logs ==="
+          docker-compose logs backend
+          echo "=== Frontend Logs ==="
+          docker-compose logs frontend
+      
+      - name: 🧹 清理环境
+        if: always()
+        run: |
+          docker-compose down -v
+          docker system prune -f
+
+  # ================================
+  # E2E测试
+  # ================================
+  e2e-test:
+    name: 端到端测试
+    runs-on: ubuntu-latest
+    needs: docker-test
+    
+    steps:
+      - name: 📥 拉取代码
+        uses: actions/checkout@v4
+      
+      - name: 📦 设置Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      
+      - name: 🎭 安装Playwright
+        run: |
+          npm install -D @playwright/test
+          npx playwright install --with-deps chromium
+      
+      - name: 🔧 设置环境
+        run: |
+          cp .env.example .env
+          echo "GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY || 'mock-api-key' }}" >> .env
+      
+      - name: 🐳 启动Docker环境
+        run: |
+          docker-compose up -d
+          sleep 25
+      
+      - name: 🎬 运行E2E测试
+        run: |
+          npx playwright test
+        env:
+          CI: true
+      
+      - name: 📊 上传测试报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+      
+      - name: 📸 上传失败截图
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-screenshots
+          path: test-results/
+          retention-days: 7
+      
+      - name: 🧹 清理
+        if: always()
+        run: docker-compose down -v
+
+  # ================================
+  # 安全扫描
+  # ================================
+  security-scan:
+    name: 安全扫描
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 拉取代码
+        uses: actions/checkout@v4
+      
+      - name: 🔍 后端依赖安全扫描
+        run: |
+          pip install safety
+          safety check --json || echo "发现安全漏洞（警告）"
+        continue-on-error: true
+      
+      - name: 🔍 前端依赖安全扫描
+        run: |
+          cd frontend
+          npm audit --audit-level=moderate || echo "发现安全漏洞（警告）"
+        continue-on-error: true
+      
+      - name: 🔒 Dockerfile安全扫描
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: backend/Dockerfile
+        continue-on-error: true
+
+  # ================================
+  # 测试总结
+  # ================================
+  test-summary:
+    name: 📊 测试总结
+    runs-on: ubuntu-latest
+    needs: [backend-unit-test, backend-integration-test, frontend-test, docker-test, e2e-test, security-scan]
+    if: always()
+    
+    steps:
+      - name: 📊 输出测试结果
+        run: |
+          echo "================================="
+          echo "🎯 CI/CD 测试完成"
+          echo "================================="
+          echo ""
+          echo "测试结果："
+          echo "  后端单元测试: ${{ needs.backend-unit-test.result }}"
+          echo "  后端集成测试: ${{ needs.backend-integration-test.result }}"
+          echo "  前端测试: ${{ needs.frontend-test.result }}"
+          echo "  Docker环境测试: ${{ needs.docker-test.result }}"
+          echo "  E2E测试: ${{ needs.e2e-test.result }}"
+          echo "  安全扫描: ${{ needs.security-scan.result }}"
+          echo ""
+      
+      - name: ✅ 检查是否全部通过
+        if: |
+          needs.backend-unit-test.result != 'success' ||
+          needs.backend-integration-test.result != 'success' ||
+          needs.frontend-test.result != 'success' ||
+          needs.docker-test.result != 'success' ||
+          needs.e2e-test.result != 'success'
+        run: |
+          echo "❌ 部分测试失败，请检查日志"
+          exit 1
+      
+      - name: 🎉 全部测试通过
+        if: |
+          needs.backend-unit-test.result == 'success' &&
+          needs.backend-integration-test.result == 'success' &&
+          needs.frontend-test.result == 'success' &&
+          needs.docker-test.result == 'success' &&
+          needs.e2e-test.result == 'success'
+        run: |
+          echo "🎉 所有测试通过！可以合并代码"
+

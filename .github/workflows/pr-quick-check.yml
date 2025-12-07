@@ -1,0 +1,146 @@
+name: PR 快速检查
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+
+# 快速检查，2-3分钟内完成
+jobs:
+  quick-check:
+    name: 🚀 快速检查（Lint + 构建）
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    
+    steps:
+      - name: 📥 拉取代码
+        uses: actions/checkout@v4
+      
+      # 后端检查
+      - name: 🐍 设置Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: 🔍 后端语法检查
+        run: |
+          pip install flake8 black
+          cd backend
+          # 检查语法错误
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          # 检查代码格式
+          black --check . || echo "代码格式建议运行: black ."
+        continue-on-error: true
+      
+      # 前端检查
+      - name: 📦 设置Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      
+      - name: 📦 安装前端依赖
+        run: |
+          cd frontend
+          npm ci
+      
+      - name: 🔍 前端Lint检查
+        run: |
+          cd frontend
+          npm run lint
+      
+      - name: 🏗️ 前端构建检查
+        run: |
+          cd frontend
+          npm run build
+      
+      - name: ✅ 快速检查通过
+        run: |
+          echo "✅ 快速检查通过！"
+          echo "完整测试将在合并后自动运行"
+
+  # 简单的API冒烟测试
+  smoke-test:
+    name: 🔥 冒烟测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    needs: quick-check
+    
+    steps:
+      - name: 📥 拉取代码
+        uses: actions/checkout@v4
+      
+      - name: 🐍 设置Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: 📦 安装依赖
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          uv sync
+      
+      - name: 🔥 启动后端并测试
+        run: |
+          cd backend
+          # 后台启动
+          uv run python app.py &
+          SERVER_PID=$!
+          
+          # 等待启动
+          sleep 5
+          
+          # 健康检查
+          if curl -f http://localhost:5000/health; then
+            echo "✅ 后端冒烟测试通过"
+          else
+            echo "❌ 后端冒烟测试失败"
+            kill $SERVER_PID
+            exit 1
+          fi
+          
+          # 清理
+          kill $SERVER_PID
+        env:
+          GOOGLE_API_KEY: mock-key-for-testing
+          TESTING: true
+
+  pr-comment:
+    name: 💬 PR评论
+    runs-on: ubuntu-latest
+    needs: [quick-check, smoke-test]
+    if: always()
+    permissions:
+      pull-requests: write
+    
+    steps:
+      - name: 评论PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const quickCheck = '${{ needs.quick-check.result }}';
+            const smokeTest = '${{ needs.smoke-test.result }}';
+            
+            let message = '## 🚀 快速检查结果\n\n';
+            
+            if (quickCheck === 'success' && smokeTest === 'success') {
+              message += '✅ **快速检查通过！**\n\n';
+              message += '- ✅ 代码格式检查\n';
+              message += '- ✅ 构建检查\n';
+              message += '- ✅ 冒烟测试\n\n';
+              message += '完整的测试将在合并到主分支后自动运行。\n';
+            } else {
+              message += '❌ **快速检查失败**\n\n';
+              message += `- ${quickCheck === 'success' ? '✅' : '❌'} 代码格式检查\n`;
+              message += `- ${smokeTest === 'success' ? '✅' : '❌'} 冒烟测试\n\n`;
+              message += '请查看详细日志并修复问题。\n';
+            }
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: message
+            });
+
