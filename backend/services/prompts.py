@@ -268,8 +268,9 @@ def get_image_generation_prompt(page_desc: str, outline_text: str,
 1. 非必要情况下，页面中禁止出现markdown格式符号，如#和*等。
 2. 页面文字中，标点符号和文字排版布局可进一步设计美化，但非符号文字内容需和"页面描述"完全一致
 3. 要求文字清晰锐利，画面为4K分辨率 16:9比例。画面配色与风格保持严格一致。
-4. **禁止出现与当前页面描述无关的任何文字，特别是参考图中的文字。**
-5. ppt使用全中文。{material_images_note}{extra_req_text}
+4. 画面组件布局需要根据页面内容灵活调整，可添加素材平衡画面整体观感，以达到最佳的视觉效果。
+5. **禁止出现与当前页面描述无关的任何文字，特别是参考图中的文字。**
+6. ppt使用全中文。{material_images_note}{extra_req_text}
 </requirements>
 """)
     
