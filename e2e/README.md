@@ -81,18 +81,33 @@ npx playwright test api-full-flow.spec.ts --workers=1
 **特点**：
 - ✅ 从浏览器 UI 开始操作（模拟真实用户）
 - ✅ 测试完整的用户交互流程
-- ✅ 也需要真实的 AI API
+- ✅ 需要真实的 AI API（Google Gemini）
 - ⚠️ 运行时间更长（15-20 分钟）
+- ✅ 在 CI 中自动运行（如果有 API key）
 
 **用途**：
 - 发布前的最终验证
-- 手动运行，不在 CI 中自动运行
+- 验证真实用户体验
+- CI/CD 完整流程测试
 
 **本地运行**：
 ```bash
-# 明确指定文件名运行（默认配置已排除）
-npx playwright test ui-full-flow.spec.ts
+# 1. 确保 .env 中配置了真实的 GOOGLE_API_KEY
+# 2. 启动服务
+docker compose up -d
+
+# 3. 等待服务就绪
+./scripts/wait-for-health.sh http://localhost:5000/health 60 2
+./scripts/wait-for-health.sh http://localhost:3000 60 2
+
+# 4. 运行测试
+npx playwright test ui-full-flow.spec.ts --workers=1
 ```
+
+**CI 运行**：
+- 自动运行：在 `docker-test` job 中
+- 条件：`GOOGLE_API_KEY` 已在 GitHub Secrets 中配置
+- 跳过：如果没有配置 API key 或是 Fork PR，会跳过并显示说明
 
 ---
 

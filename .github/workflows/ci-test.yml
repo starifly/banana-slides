@@ -270,14 +270,14 @@ jobs:
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       
-      - name: Run E2E tests
+      - name: Run API E2E tests
         if: steps.check_e2e.outputs.skip != 'true' && env.GOOGLE_API_KEY != '' && env.GOOGLE_API_KEY != 'mock-api-key-for-testing'
         run: |
-          # Run complete E2E flow (from creation to PPT export)
-          # This is the ONLY E2E test - tests the full AI generation workflow
+          # Run API-driven E2E flow (from creation to PPT export)
+          # Tests the full AI generation workflow via API calls
           # Requires: Real Google API key
           # Using Gemini format for full flow testing
-          echo "Running E2E tests with Gemini format"
+          echo "Running API E2E tests with Gemini format"
           npx playwright test api-full-flow.spec.ts --workers=1
         env:
           CI: true
@@ -286,7 +286,23 @@ jobs:
         timeout-minutes: 15
         continue-on-error: false
       
-      - name: Upload E2E test report
+      - name: Run UI E2E tests
+        if: steps.check_e2e.outputs.skip != 'true' && env.GOOGLE_API_KEY != '' && env.GOOGLE_API_KEY != 'mock-api-key-for-testing'
+        run: |
+          # Run UI-driven E2E flow (from browser UI to PPT export)
+          # Tests the complete user interaction flow in the browser
+          # Requires: Real Google API key
+          # Takes longer (15-20 minutes) but tests real user experience
+          echo "Running UI E2E tests with Gemini format"
+          npx playwright test ui-full-flow.spec.ts --workers=1
+        env:
+          CI: true
+          # Ensure API key is not logged
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        timeout-minutes: 25
+        continue-on-error: false
+      
+      - name: Upload E2E test reports
         if: always() && (env.GOOGLE_API_KEY != '' && env.GOOGLE_API_KEY != 'mock-api-key-for-testing')
         uses: actions/upload-artifact@v4
         with:
