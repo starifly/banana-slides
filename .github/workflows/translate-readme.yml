@@ -54,8 +54,8 @@ jobs:
           AI_PROVIDER_FORMAT: gemini
           TEXT_MODEL: gemini-3-flash-preview
         run: |
-          echo "开始翻译 README.md..."
-          uv run python scripts/translate_readme.py
+          echo "开始增量翻译 README.md（仅翻译修改的部分）..."
+          uv run python scripts/translate_readme_incremental.py
           echo "翻译完成！"
 
       - name: Check for changes
